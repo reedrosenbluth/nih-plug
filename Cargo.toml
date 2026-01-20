@@ -16,6 +16,7 @@ members = [
   "nih_plug_derive",
   "nih_plug_egui",
   "nih_plug_iced",
+  # "nih_plug_slint",  # NOTE: Incompatible with nih_plug_iced due to fontconfig conflict
   "nih_plug_vizia",
   "nih_plug_xtask",
 

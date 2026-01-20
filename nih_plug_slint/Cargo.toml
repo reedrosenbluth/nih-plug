@@ -1,0 +1,27 @@
+[package]
+name = "nih_plug_slint"
+version = "0.0.0"
+edition = "2021"
+authors = ["Reed Rosenbluth"]
+license = "ISC"
+
+description = "An adapter to use Slint GUIs with NIH-plug"
+
+# NOTE: This crate is incompatible with nih_plug_iced due to a fontconfig native
+# library conflict. Slint uses yeslogic-fontconfig-sys while iced uses
+# servo-fontconfig-sys, and Cargo only allows one crate to link a native library.
+
+[features]
+default = []
+
+[dependencies]
+nih_plug = { path = "..", default-features = false }
+baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "9a0b42c09d712777b2edb4c5e0cb6baf21e988f0" }
+slint = { version = "1.14", default-features = false, features = ["std", "renderer-software", "compat-1-2"] }
+softbuffer = { version = "0.4.6", default-features = false, features = ["kms", "x11"] }
+raw-window-handle = "0.5"
+raw-window-handle-06 = { package = "raw-window-handle", version = "0.6" }
+crossbeam = "0.8"
+keyboard-types = { version = "0.6.1", default-features = false }
+parking_lot = "0.12"
+serde = { version = "1.0", features = ["derive"] }
