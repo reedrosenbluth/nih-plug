@@ -1,5 +1,6 @@
 //! Baseview WindowHandler implementation for Slint.
 
+use crate::editor::ParamChangedCallback;
 use crate::event_translation::translate_event;
 use crate::platform::set_pending_window;
 use crate::{SlintMouseControl, SlintState};
@@ -11,6 +12,7 @@ use std::cell::RefCell;
 use std::num::{NonZeroU32, NonZeroIsize};
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::io::Write;
 
@@ -64,7 +66,7 @@ pub struct SlintWindowHandler<C: slint::ComponentHandle + 'static> {
     slint_window: Rc<MinimalSoftwareWindow>,
 
     /// The Slint component instance
-    _component: C,
+    component: C,
 
     /// Softbuffer context
     _sb_context: softbuffer::Context<SoftbufferWindowHandleAdapter>,
@@ -93,6 +95,12 @@ pub struct SlintWindowHandler<C: slint::ComponentHandle + 'static> {
 
     /// Whether unbounded mouse movement is currently active
     unbounded_active: RefCell<bool>,
+
+    /// Optional callback invoked when parameter values change from the host.
+    on_param_values_changed: Option<ParamChangedCallback<C>>,
+
+    /// Flag set by the editor when parameters change. Checked in on_frame.
+    emit_parameters_changed_event: Arc<AtomicBool>,
 }
 
 impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
@@ -103,7 +111,8 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
         component_factory: Arc<F>,
         mouse_control: SlintMouseControl,
         scale_factor: f32,
-        component_weak_out: Arc<parking_lot::Mutex<Option<slint::Weak<C>>>>,
+        on_param_values_changed: Option<ParamChangedCallback<C>>,
+        emit_parameters_changed_event: Arc<AtomicBool>,
     ) -> Self
     where
         F: Fn(Arc<dyn GuiContext>, SlintMouseControl) -> C + Send + Sync + 'static,
@@ -178,9 +187,6 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
         let component = component_factory(Arc::clone(&gui_context), mouse_control.clone());
         debug_log("Slint component created");
 
-        // Store the weak reference for param change callbacks
-        *component_weak_out.lock() = Some(component.as_weak());
-
         // Show the component in the window
         debug_log("Showing Slint component...");
         component.show().expect("Failed to show Slint component");
@@ -201,7 +207,7 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
             gui_context,
             slint_state,
             slint_window,
-            _component: component,
+            component,
             _sb_context: sb_context,
             sb_surface,
             pixel_buffer: RefCell::new(pixel_buffer),
@@ -212,6 +218,8 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
             mouse_button_pressed: RefCell::new(false),
             mouse_control,
             unbounded_active: RefCell::new(false),
+            on_param_values_changed,
+            emit_parameters_changed_event,
         }
     }
 }
@@ -232,14 +240,24 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
     }
 
     fn on_frame_inner(&mut self) {
-        // DEBUG: Uncomment below to test if softbuffer blit works (should show red)
-        // if let Ok(mut buffer) = self.sb_surface.buffer_mut() {
-        //     for pixel in buffer.iter_mut() {
-        //         *pixel = 0x00FF0000; // Red
-        //     }
-        //     let _ = buffer.present();
-        // }
-        // return;
+        // Check if parameters changed and invoke callback if needed
+        let flag_value = self.emit_parameters_changed_event.load(Ordering::Relaxed);
+        if flag_value {
+            debug_log(&format!("Flag is true, attempting compare_exchange"));
+        }
+        if self
+            .emit_parameters_changed_event
+            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            debug_log("emit_parameters_changed_event flag was set, calling callback");
+            if let Some(callback) = &self.on_param_values_changed {
+                callback(&self.component);
+                debug_log("callback completed");
+            } else {
+                debug_log("no callback set");
+            }
+        }
 
         // Update Slint timers and animations
         slint::platform::update_timers_and_animations();

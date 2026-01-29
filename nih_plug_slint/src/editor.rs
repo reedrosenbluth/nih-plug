@@ -6,24 +6,12 @@ use crate::{SlintMouseControl, SlintState};
 use baseview::{Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
 use crossbeam::atomic::AtomicCell;
 use nih_plug::prelude::{Editor, GuiContext, ParentWindowHandle};
-use parking_lot::Mutex;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
-use std::io::Write;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-fn debug_log(msg: &str) {
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/nih_plug_slint_debug.log")
-    {
-        let _ = writeln!(file, "{}", msg);
-    }
-}
-
 /// Type alias for the param values changed callback.
-pub type ParamChangedCallback<C> = Box<dyn Fn(&C) + Send + Sync>;
+pub type ParamChangedCallback<C> = Arc<dyn Fn(&C) + Send + Sync>;
 
 /// An [`Editor`] implementation that uses Slint for rendering.
 pub(crate) struct SlintEditor<C, F>
@@ -38,8 +26,9 @@ where
     pub(crate) scaling_factor: AtomicCell<Option<f32>>,
     /// Optional callback invoked when parameter values change from the host.
     pub(crate) on_param_values_changed: Option<ParamChangedCallback<C>>,
-    /// Weak reference to the component, set when spawn() is called.
-    pub(crate) component_weak: Arc<Mutex<Option<slint::Weak<C>>>>,
+    /// Whether to invoke the param changed callback during the next frame. This is set in the
+    /// `param_values_changed()` implementation and checked by the window handler in `on_frame`.
+    pub(crate) emit_parameters_changed_event: Arc<AtomicBool>,
 }
 
 /// This version of `baseview` uses a different version of `raw_window_handle` than NIH-plug, so we
@@ -68,22 +57,6 @@ unsafe impl HasRawWindowHandle for ParentWindowHandleAdapter {
     }
 }
 
-impl<C, F> SlintEditor<C, F>
-where
-    C: slint::ComponentHandle + 'static,
-    F: Fn(Arc<dyn GuiContext>, SlintMouseControl) -> C + Send + Sync + 'static,
-{
-    /// Invoke the param changed callback if one is set and the component is alive.
-    fn invoke_param_changed_callback(&self) {
-        if let Some(callback) = &self.on_param_values_changed {
-            if let Some(component) = self.component_weak.lock().as_ref().and_then(|w| w.upgrade())
-            {
-                callback(&component);
-            }
-        }
-    }
-}
-
 impl<C, F> Editor for SlintEditor<C, F>
 where
     C: slint::ComponentHandle + 'static,
@@ -94,28 +67,21 @@ where
         parent: ParentWindowHandle,
         context: Arc<dyn GuiContext>,
     ) -> Box<dyn std::any::Any + Send> {
-        debug_log("Editor::spawn() called");
-
         // Ensure the Slint platform is set up
         ensure_slint_platform();
 
         let (unscaled_width, unscaled_height) = self.slint_state.scaled_logical_size();
         let scaling_factor = self.scaling_factor.load();
-        let user_scale_factor = self.slint_state.user_scale_factor();
-        debug_log(&format!(
-            "Editor size: {}x{}, system scaling: {:?}, user scale: {}",
-            unscaled_width, unscaled_height, scaling_factor, user_scale_factor
-        ));
 
         let gui_context = Arc::clone(&context);
         let slint_state = Arc::clone(&self.slint_state);
         let component_factory = Arc::clone(&self.component_factory);
-        let component_weak = Arc::clone(&self.component_weak);
+        let on_param_values_changed = self.on_param_values_changed.clone();
+        let emit_parameters_changed_event = Arc::clone(&self.emit_parameters_changed_event);
 
         // Create the mouse control that will be passed to the component factory
         let mouse_control = SlintMouseControl::new();
 
-        debug_log("Opening baseview window...");
         let window = baseview::Window::open_parented(
             &ParentWindowHandleAdapter(parent),
             WindowOpenOptions {
@@ -127,7 +93,6 @@ where
                 scale: scaling_factor
                     .map(|factor| WindowScalePolicy::ScaleFactor(factor as f64))
                     .unwrap_or(WindowScalePolicy::SystemScaleFactor),
-
             },
             move |window: &mut baseview::Window<'_>| -> SlintWindowHandler<C> {
                 SlintWindowHandler::new(
@@ -137,7 +102,8 @@ where
                     component_factory,
                     mouse_control,
                     scaling_factor.unwrap_or(1.0),
-                    component_weak,
+                    on_param_values_changed,
+                    emit_parameters_changed_event,
                 )
             },
         );
@@ -164,15 +130,21 @@ where
         true
     }
 
-    fn param_value_changed(&self, _id: &str, _normalized_value: f32) {
-        // For individual param changes, we also call the callback
-        self.invoke_param_changed_callback();
+    fn param_value_changed(&self, id: &str, _normalized_value: f32) {
+        // Set the flag - the window handler will check this in on_frame and call the callback
+        nih_plug::debug::nih_log!("param_value_changed: {}", id);
+        self.emit_parameters_changed_event
+            .store(true, Ordering::Relaxed);
     }
 
-    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {}
+    fn param_modulation_changed(&self, _id: &str, _modulation_offset: f32) {
+        self.emit_parameters_changed_event
+            .store(true, Ordering::Relaxed);
+    }
 
     fn param_values_changed(&self) {
-        self.invoke_param_changed_callback();
+        self.emit_parameters_changed_event
+            .store(true, Ordering::Relaxed);
     }
 }
 

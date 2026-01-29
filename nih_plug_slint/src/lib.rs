@@ -188,7 +188,7 @@ where
 ///         // ... setup ...
 ///         ui
 ///     },
-///     Some(Box::new({
+///     Some(Arc::new({
 ///         let params = params.clone();
 ///         move |ui: &MyPluginUI| {
 ///             ui.set_gain(params.gain.value());
@@ -219,7 +219,7 @@ where
         scaling_factor: AtomicCell::new(Some(1.0)),
 
         on_param_values_changed,
-        component_weak: Arc::new(parking_lot::Mutex::new(None)),
+        emit_parameters_changed_event: Arc::new(AtomicBool::new(false)),
     }))
 }
 
