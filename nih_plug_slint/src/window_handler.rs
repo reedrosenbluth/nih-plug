@@ -103,6 +103,7 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
         component_factory: Arc<F>,
         mouse_control: SlintMouseControl,
         scale_factor: f32,
+        component_weak_out: Arc<parking_lot::Mutex<Option<slint::Weak<C>>>>,
     ) -> Self
     where
         F: Fn(Arc<dyn GuiContext>, SlintMouseControl) -> C + Send + Sync + 'static,
@@ -177,6 +178,9 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
         let component = component_factory(Arc::clone(&gui_context), mouse_control.clone());
         debug_log("Slint component created");
 
+        // Store the weak reference for param change callbacks
+        *component_weak_out.lock() = Some(component.as_weak());
+
         // Show the component in the window
         debug_log("Showing Slint component...");
         component.show().expect("Failed to show Slint component");
@@ -213,6 +217,20 @@ impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
 }
 
 impl<C: slint::ComponentHandle + 'static> SlintWindowHandler<C> {
+    /// Process any pending cursor control requests immediately.
+    /// Called from both on_frame() and on_event() to ensure responsive cursor restoration.
+    fn process_cursor_requests(&mut self, window: &mut baseview::Window) {
+        if let Some((enable, restore_position)) = self.mouse_control.take_request() {
+            if enable && !*self.unbounded_active.borrow() {
+                window.enable_unbounded_mouse_movement(true, restore_position);
+                *self.unbounded_active.borrow_mut() = true;
+            } else if !enable && *self.unbounded_active.borrow() {
+                window.enable_unbounded_mouse_movement(false, false);
+                *self.unbounded_active.borrow_mut() = false;
+            }
+        }
+    }
+
     fn on_frame_inner(&mut self) {
         // DEBUG: Uncomment below to test if softbuffer blit works (should show red)
         // if let Ok(mut buffer) = self.sb_surface.buffer_mut() {
@@ -257,15 +275,7 @@ impl<C: slint::ComponentHandle + 'static> baseview::WindowHandler for SlintWindo
         // Wrap everything in catch_unwind to prevent panics from aborting in C callback
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // Poll for mouse control requests
-            if let Some((enable, restore_position)) = self.mouse_control.take_request() {
-                if enable && !*self.unbounded_active.borrow() {
-                    window.enable_unbounded_mouse_movement(true, restore_position);
-                    *self.unbounded_active.borrow_mut() = true;
-                } else if !enable && *self.unbounded_active.borrow() {
-                    window.enable_unbounded_mouse_movement(false, false);
-                    *self.unbounded_active.borrow_mut() = false;
-                }
-            }
+            self.process_cursor_requests(window);
 
             self.on_frame_inner();
         }));
@@ -277,12 +287,20 @@ impl<C: slint::ComponentHandle + 'static> baseview::WindowHandler for SlintWindo
 
     fn on_event(
         &mut self,
-        _window: &mut baseview::Window,
+        window: &mut baseview::Window,
         event: baseview::Event,
     ) -> baseview::EventStatus {
         // Wrap in catch_unwind to prevent panics from aborting in C callback
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.on_event_inner(event)
+            let status = self.on_event_inner(event);
+
+            // Process cursor control requests immediately after event dispatch.
+            // This ensures that when a PointerReleased event triggers drag_ended(),
+            // the cursor restoration happens immediately rather than waiting for
+            // the next on_frame() call (which may be delayed up to 15ms or more).
+            self.process_cursor_requests(window);
+
+            status
         }));
 
         match result {

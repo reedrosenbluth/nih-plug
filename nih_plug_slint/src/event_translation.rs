@@ -6,23 +6,30 @@ use slint::{LogicalPosition, LogicalSize};
 
 /// Translates a baseview event to a Slint WindowEvent.
 /// Returns `None` if the event doesn't have a corresponding Slint event.
-pub fn translate_event(event: &baseview::Event, scale_factor: f32) -> Option<WindowEvent> {
+///
+/// The `is_button_pressed` parameter indicates whether a mouse button is currently held down.
+/// This is used to suppress `PointerExited` events during drags, allowing drag operations
+/// to continue when the cursor leaves the window.
+pub fn translate_event(event: &baseview::Event, scale_factor: f32, is_button_pressed: bool) -> Option<WindowEvent> {
     match event {
-        baseview::Event::Mouse(mouse_event) => translate_mouse_event(mouse_event, scale_factor),
+        baseview::Event::Mouse(mouse_event) => translate_mouse_event(mouse_event, scale_factor, is_button_pressed),
         baseview::Event::Keyboard(keyboard_event) => translate_keyboard_event(keyboard_event),
         baseview::Event::Window(window_event) => translate_window_event(window_event, scale_factor),
     }
 }
 
-fn translate_mouse_event(event: &baseview::MouseEvent, scale_factor: f32) -> Option<WindowEvent> {
+fn translate_mouse_event(event: &baseview::MouseEvent, _scale_factor: f32, is_button_pressed: bool) -> Option<WindowEvent> {
+    // Note: baseview on macOS reports coordinates in logical (post-scaled) units,
+    // so we should NOT divide by scale_factor. The coordinates are already correct.
+    // On Windows/Linux, baseview may behave differently - this needs testing.
     match event {
         baseview::MouseEvent::CursorMoved {
             position,
             modifiers: _,
         } => Some(WindowEvent::PointerMoved {
             position: LogicalPosition::new(
-                position.x as f32 / scale_factor,
-                position.y as f32 / scale_factor,
+                position.x as f32,
+                position.y as f32,
             ),
         }),
         baseview::MouseEvent::ButtonPressed { button, modifiers: _ } => {
@@ -53,10 +60,17 @@ fn translate_mouse_event(event: &baseview::MouseEvent, scale_factor: f32) -> Opt
                 delta_y,
             })
         }
-        baseview::MouseEvent::CursorEntered => Some(WindowEvent::PointerMoved {
-            position: LogicalPosition::default(),
-        }),
-        baseview::MouseEvent::CursorLeft => Some(WindowEvent::PointerExited),
+        // Don't emit a move to (0,0) on cursor enter - it confuses touch areas
+        baseview::MouseEvent::CursorEntered => None,
+        baseview::MouseEvent::CursorLeft => {
+            // Suppress PointerExited during drags - on macOS, mouseDragged: continues
+            // to fire outside the window, so we want to keep the interaction alive.
+            if is_button_pressed {
+                None
+            } else {
+                Some(WindowEvent::PointerExited)
+            }
+        }
         // Drag and drop events - not currently supported by Slint
         baseview::MouseEvent::DragEntered { .. }
         | baseview::MouseEvent::DragMoved { .. }

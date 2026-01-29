@@ -46,6 +46,9 @@ members = [
   "plugins/safety_limiter",
   "plugins/spectral_compressor",
 ]
+exclude = [
+  "nih_plug_slint",  # Incompatible with nih_plug_iced due to fontconfig conflict
+]
 
 [features]
 default = ["vst3"]

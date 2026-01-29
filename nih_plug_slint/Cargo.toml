@@ -16,7 +16,7 @@ default = []
 
 [dependencies]
 nih_plug = { path = "..", default-features = false }
-baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "9a0b42c09d712777b2edb4c5e0cb6baf21e988f0" }
+baseview = { git = "https://github.com/reedrosenbluth/baseview" }
 slint = { version = "1.14", default-features = false, features = ["std", "renderer-software", "compat-1-2"] }
 softbuffer = { version = "0.4.6", default-features = false, features = ["kms", "x11"] }
 raw-window-handle = "0.5"
