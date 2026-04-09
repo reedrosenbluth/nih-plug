@@ -13,7 +13,8 @@ use slint::{LogicalPosition, LogicalSize};
 pub fn translate_event(event: &baseview::Event, scale_factor: f32, is_button_pressed: bool) -> Option<WindowEvent> {
     match event {
         baseview::Event::Mouse(mouse_event) => translate_mouse_event(mouse_event, scale_factor, is_button_pressed),
-        baseview::Event::Keyboard(keyboard_event) => translate_keyboard_event(keyboard_event),
+        // Don't translate keyboard events — let them pass through to the DAW host
+        baseview::Event::Keyboard(_) => None,
         baseview::Event::Window(window_event) => translate_window_event(window_event, scale_factor),
     }
 }
